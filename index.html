@@ -23,7 +23,7 @@
   #score{position:absolute;top:14px;right:18px;font-size:20px;font-weight:bold;text-shadow:1px 1px 3px #000;z-index:10;text-align:right}
   #score small{display:block;font-size:12px;opacity:.85;font-weight:normal}
   #ammo{position:absolute;top:210px;right:18px;font-size:14px;font-weight:800;text-shadow:1px 1px 3px #000;z-index:10;text-align:right;display:none}
-  #crosshair{position:absolute;left:50%;top:50%;width:26px;height:26px;transform:translate(-50%,-50%);z-index:12;pointer-events:none;display:none}
+  #crosshair{position:absolute;left:50%;top:42%;width:26px;height:26px;transform:translate(-50%,-50%);z-index:12;pointer-events:none;display:none}
   #crosshair:before,#crosshair:after{content:"";position:absolute;background:rgba(255,255,255,.92);box-shadow:0 0 5px rgba(255,80,220,.9)}
   #crosshair:before{left:12px;top:0;width:2px;height:26px}
   #crosshair:after{left:0;top:12px;width:26px;height:2px}
@@ -40,7 +40,7 @@
   #lockHint{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.6);padding:6px 14px;border-radius:6px;font-size:13px;z-index:30;display:none;cursor:pointer;pointer-events:auto}
   .chat{position:absolute;background:rgba(255,255,255,.92);color:#04111c;padding:4px 10px;border-radius:14px;font-size:12px;font-weight:bold;pointer-events:none;transform:translate(-50%,-100%);transition:opacity .3s;text-shadow:none;box-shadow:0 2px 6px rgba(0,0,0,.4);white-space:nowrap}
   #vignette{position:absolute;inset:0;pointer-events:none;z-index:9;box-shadow:inset 0 0 160px rgba(0,0,0,.35);opacity:.5}
-  #gameOver{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:radial-gradient(circle at 50% 35%,rgba(33,93,126,.86),rgba(2,9,18,.96) 72%);z-index:60;text-align:center;padding:22px}
+  #gameOver{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:rgba(2,9,18,.58);backdrop-filter:blur(3px);z-index:60;text-align:center;padding:22px}
   #gameOver h2{font-size:48px;margin:0;text-shadow:0 4px 18px #000}
   #gameOver p{margin:2px 0;font-size:15px;opacity:.9;max-width:520px}
   #restartBtn{margin-top:14px;padding:12px 34px;border:0;border-radius:8px;background:#7fd2ff;color:#04111c;font-size:18px;font-weight:800;cursor:pointer;box-shadow:0 4px 16px rgba(127,210,255,.35)}
@@ -81,6 +81,7 @@
   <b>E</b> bite (water) / breach (ice) &nbsp; <b>F</b> echolocation pulse<br>
   <b>C</b> call pod &nbsp; <b>Q</b> joint attack<br>
   In the unicorn world: <b>E</b> collect/eat &nbsp; <b>Click</b> shoot after finding the ground blaster.<br>
+  In the kitchen: survive the giant knife and <b>Space</b> jump into the toaster.<br>
   Hunt seals on ice, chase penguins/fish in water, ambush walruses. At level 2, find the pink portal.
 </div>
 
@@ -1137,6 +1138,8 @@ const playerState = {
   world: 'arctic',
   hasGun: false,
   ammo: 30,
+  kitchenY: 5.15,
+  invuln: 0,
   dead: false,
 };
 
@@ -1156,6 +1159,21 @@ let monsterSpawnTimer = 0;
 let reloadTimer = 0;
 const GUN_MAG_SIZE = 30;
 const GUN_RELOAD_TIME = 2.2;
+const KITCHEN_Z = 10400;
+let whitePortal = null;
+let kitchenBuilt = false;
+const kitchenObjects = [];
+let toaster = null;
+let toasterArrow = null;
+let giantHuman = null;
+let kitchenWin = false;
+
+function addKitchenObject(obj){
+  obj.visible = false;
+  scene.add(obj);
+  kitchenObjects.push(obj);
+  return obj;
+}
 
 function addMeadowObject(obj){
   obj.visible = false;
@@ -1282,9 +1300,99 @@ function makeMeadowMonster(){
   g.traverse(o=>{ if(o.isMesh) o.castShadow = o.receiveShadow = true; });
   return g;
 }
+function makeZombie(){
+  const g = new THREE.Group();
+  const skin = new THREE.MeshStandardMaterial({color:0x7ba568, flatShading:true, roughness:.8});
+  const cloth = new THREE.MeshStandardMaterial({color:0x5b4ba8, flatShading:true, roughness:.8});
+  const dark = new THREE.MeshStandardMaterial({color:0x2d2630, flatShading:true});
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.85,1.35,0.42), cloth);
+  body.position.y = 1.25;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42,1), skin);
+  head.position.y = 2.2;
+  g.add(head);
+  const arms = [];
+  for (const sx of [-1,1]){
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.22,1.05,0.24), skin);
+    arm.position.set(sx*0.65,1.45,-0.24);
+    arm.rotation.x = -0.65;
+    g.add(arm);
+    arms.push(arm);
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.26,0.95,0.28), dark);
+    leg.position.set(sx*0.24,0.45,0);
+    g.add(leg);
+  }
+  g.userData.kind = 'zombie';
+  g.userData.hp = 3;
+  g.userData.speed = 3.6;
+  g.userData.vel = new THREE.Vector3();
+  g.userData.attackCooldown = 0;
+  g.userData.legs = g.children.filter(o=>o.geometry && o.geometry.type==='BoxGeometry');
+  g.userData.arms = arms;
+  g.traverse(o=>{ if(o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return g;
+}
+function makeEvilMeatball(){
+  const g = new THREE.Group();
+  const meat = new THREE.MeshStandardMaterial({color:0x8e3838, flatShading:true, roughness:.8, emissive:0x250000, emissiveIntensity:.12});
+  const dark = new THREE.MeshStandardMaterial({color:0x2b1717, flatShading:true});
+  const eye = new THREE.MeshBasicMaterial({color:0xfff3bf});
+  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(1.15,2), meat);
+  body.position.y = 1.35;
+  body.scale.set(1.25,1.05,1.2);
+  g.add(body);
+  for (const sx of [-1,1]){
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.14,8,6), eye);
+    e.position.set(sx*0.36,1.55,-0.98);
+    g.add(e);
+  }
+  const legs = [];
+  for (const sx of [-0.7,-0.25,0.25,0.7]){
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.18,0.95,0.18), dark);
+    leg.position.set(sx,0.48,0.22);
+    g.add(leg);
+    legs.push(leg);
+  }
+  g.userData.kind = 'meatball';
+  g.userData.hp = 6;
+  g.userData.speed = 2.9;
+  g.userData.vel = new THREE.Vector3();
+  g.userData.attackCooldown = 0;
+  g.userData.legs = legs;
+  g.traverse(o=>{ if(o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return g;
+}
+function makeJumpingMushroom(){
+  const g = new THREE.Group();
+  const stemMat = new THREE.MeshStandardMaterial({color:0xf0dfc2, flatShading:true, roughness:.82});
+  const capMat = new THREE.MeshStandardMaterial({color:0xb91d55, flatShading:true, roughness:.75, emissive:0x2b0014, emissiveIntensity:.16});
+  const spotMat = new THREE.MeshStandardMaterial({color:0xfff4f4, flatShading:true, roughness:.7});
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.42,0.55,1.2,7), stemMat);
+  stem.position.y = 0.75;
+  g.add(stem);
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.95,12,7,0,Math.PI*2,0,Math.PI*0.55), capMat);
+  cap.scale.set(1.25,0.55,1.15);
+  cap.position.y = 1.55;
+  g.add(cap);
+  for (let i=0;i<6;i++){
+    const spot = new THREE.Mesh(new THREE.IcosahedronGeometry(0.12+Math.random()*0.08,0), spotMat);
+    spot.position.set((Math.random()-.5)*1.2,1.8,(Math.random()-.5)*0.85);
+    g.add(spot);
+  }
+  g.userData.kind = 'mushroom';
+  g.userData.hp = 4;
+  g.userData.speed = 3.2;
+  g.userData.vel = new THREE.Vector3();
+  g.userData.attackCooldown = 0;
+  g.userData.jumpPhase = Math.random()*Math.PI*2;
+  g.userData.legs = [stem];
+  g.traverse(o=>{ if(o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return g;
+}
 function spawnMeadowMonster(){
   if (playerState.world !== 'meadow') return;
-  const monster = makeMeadowMonster();
+  const roll = Math.random();
+  const monster = roll < 0.28 ? makeZombie() : roll < 0.55 ? makeEvilMeatball() : roll < 0.82 ? makeJumpingMushroom() : makeMeadowMonster();
   const a = Math.random()*Math.PI*2;
   const r = 85 + Math.random()*70;
   monster.position.set(player.position.x + Math.cos(a)*r, 0, player.position.z + Math.sin(a)*r);
@@ -1341,14 +1449,202 @@ function shootUnicornGun(){
 }
 function updateAmmoHud(){
   const ammoEl = document.getElementById('ammo');
-  const ammoCountEl = document.getElementById('ammoCount');
   const crosshairEl = document.getElementById('crosshair');
   const show = playerState.world === 'meadow' && playerState.hasGun;
   ammoEl.style.display = show ? 'block' : 'none';
   crosshairEl.style.display = show ? 'block' : 'none';
   if (show){
     ammoEl.textContent = reloadTimer > 0 ? `Reloading ${(reloadTimer).toFixed(1)}s` : `Blaster: ${playerState.ammo}/${GUN_MAG_SIZE}`;
+    const p = player.position.clone();
+    p.y += 3.6;
+    p.project(camera);
+    crosshairEl.style.left = `${(p.x*0.5+0.5)*innerWidth}px`;
+    crosshairEl.style.top = `${(-p.y*0.5+0.5)*innerHeight}px`;
   }
+}
+function makeToast(){
+  const g = new THREE.Group();
+  const bread = new THREE.MeshStandardMaterial({color:0xe9b56f, flatShading:true, roughness:.85});
+  const crust = new THREE.MeshStandardMaterial({color:0x9a5b28, flatShading:true, roughness:.9});
+  const face = new THREE.MeshBasicMaterial({color:0x3a2416});
+  const slice = new THREE.Mesh(new THREE.BoxGeometry(1.35,1.7,0.28), bread);
+  slice.position.y = 0.95;
+  g.add(slice);
+  const top = new THREE.Mesh(new THREE.SphereGeometry(0.68,12,6,0,Math.PI*2,0,Math.PI*0.58), bread);
+  top.scale.set(1,0.65,0.22);
+  top.position.y = 1.72;
+  g.add(top);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.72,0.08,6,18), crust);
+  rim.scale.set(0.9,1.05,0.16);
+  rim.position.y = 1.28;
+  rim.rotation.x = Math.PI/2;
+  g.add(rim);
+  for (const sx of [-1,1]){
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.055,6,5), face);
+    eye.position.set(sx*0.28,1.26,-0.18);
+    g.add(eye);
+  }
+  const smile = new THREE.Mesh(new THREE.BoxGeometry(0.38,0.035,0.035), face);
+  smile.position.set(0,1.02,-0.18);
+  g.add(smile);
+  g.scale.setScalar(0.9);
+  g.traverse(o=>{ if(o.isMesh) o.castShadow = true; });
+  return g;
+}
+function makeFloatingArrow(){
+  const g = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({color:0xfff174});
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,2.2,8), mat);
+  shaft.position.y = 1.1;
+  g.add(shaft);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.45,0.9,8), mat);
+  head.position.y = -0.25;
+  head.rotation.x = Math.PI;
+  g.add(head);
+  return g;
+}
+function makeHumanWithKnife(){
+  const g = new THREE.Group();
+  const skin = new THREE.MeshStandardMaterial({color:0xd79b73, flatShading:true, roughness:.7});
+  const shirt = new THREE.MeshStandardMaterial({color:0x4b6cb7, flatShading:true, roughness:.8});
+  const pants = new THREE.MeshStandardMaterial({color:0x26344f, flatShading:true, roughness:.85});
+  const metal = new THREE.MeshStandardMaterial({color:0xd8dde8, flatShading:true, roughness:.28, metalness:.4});
+  const body = new THREE.Mesh(new THREE.BoxGeometry(6,11,3), shirt);
+  body.position.y = 19;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(3.1,1), skin);
+  head.position.y = 27.5;
+  g.add(head);
+  for (const sx of [-1,1]){
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(2.1,10,2.2), pants);
+    leg.position.set(sx*1.7,8,0);
+    g.add(leg);
+  }
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(1.6,9,1.6), skin);
+  armL.position.set(-4.5,18,-0.2);
+  armL.rotation.z = -0.35;
+  g.add(armL);
+  const arm = new THREE.Group();
+  arm.position.set(4.1,23,-0.6);
+  const upper = new THREE.Mesh(new THREE.BoxGeometry(1.7,8.5,1.7), skin);
+  upper.position.y = -3.6;
+  arm.add(upper);
+  const knife = new THREE.Mesh(new THREE.BoxGeometry(0.55,10.5,1.0), metal);
+  knife.position.set(0,-9.2,-1.0);
+  knife.rotation.z = 0.08;
+  arm.add(knife);
+  g.add(arm);
+  g.userData.arm = arm;
+  g.userData.knife = knife;
+  g.userData.phase = 'enter';
+  g.userData.timer = 0;
+  g.userData.swingTimer = 0;
+  g.position.set(22,0,KITCHEN_Z-78);
+  g.rotation.y = -0.08;
+  g.traverse(o=>{ if(o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return addKitchenObject(g);
+}
+function addKitchenBox(x,y,z,w,h,d,color){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshStandardMaterial({color, flatShading:true, roughness:.75}));
+  m.position.set(x,y,z);
+  m.castShadow = m.receiveShadow = true;
+  return addKitchenObject(m);
+}
+function buildKitchenWorld(){
+  if (kitchenBuilt) return;
+  kitchenBuilt = true;
+  addKitchenBox(0,2.35,KITCHEN_Z,170,4.7,92,0xc7a37d);
+  addKitchenBox(0,-0.15,KITCHEN_Z,190,0.3,115,0x78604f);
+  addKitchenBox(0,8.2,KITCHEN_Z+48,172,8,4,0xf3eadb);
+  addKitchenBox(-86,8.2,KITCHEN_Z,4,8,94,0xf3eadb);
+  addKitchenBox(86,8.2,KITCHEN_Z,4,8,94,0xf3eadb);
+  addKitchenBox(-44,6.6,KITCHEN_Z-24,24,3.2,18,0x1d2730); // stove
+  for (let i=0;i<4;i++){
+    const burner = new THREE.Mesh(new THREE.TorusGeometry(2.2,0.18,6,20), new THREE.MeshBasicMaterial({color:0x050505}));
+    burner.rotation.x = Math.PI/2;
+    burner.position.set(-50+(i%2)*12,8.35,KITCHEN_Z-29+Math.floor(i/2)*9);
+    addKitchenObject(burner);
+  }
+  toaster = new THREE.Group();
+  const toasterBody = new THREE.Mesh(new THREE.BoxGeometry(11,7,8), new THREE.MeshStandardMaterial({color:0xd9dce2, flatShading:true, roughness:.35, metalness:.35}));
+  toasterBody.position.y = 8.2;
+  toaster.add(toasterBody);
+  const slot = new THREE.Mesh(new THREE.BoxGeometry(8,0.18,1.1), new THREE.MeshBasicMaterial({color:0x111111}));
+  slot.position.y = 11.85;
+  toaster.add(slot);
+  toaster.position.set(54,0,KITCHEN_Z-24);
+  toaster.userData.entry = new THREE.Vector3(54,8.3,KITCHEN_Z-24);
+  addKitchenObject(toaster);
+  toasterArrow = makeFloatingArrow();
+  toasterArrow.position.set(54,20,KITCHEN_Z-24);
+  addKitchenObject(toasterArrow);
+  const kettle = new THREE.Mesh(new THREE.IcosahedronGeometry(4,1), new THREE.MeshStandardMaterial({color:0x9fc0d6, flatShading:true, roughness:.35, metalness:.25}));
+  kettle.scale.set(1.1,0.9,1);
+  kettle.position.set(-22,9.7,KITCHEN_Z-30);
+  addKitchenObject(kettle);
+  for (let i=0;i<3;i++){
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(5.5,5.5,0.25,24), new THREE.MeshStandardMaterial({color:0xf6f6ee, flatShading:true, roughness:.55}));
+    plate.position.set(-22+i*18,7.65,KITCHEN_Z+22);
+    addKitchenObject(plate);
+    const fork = addKitchenBox(-26+i*18,8.0,KITCHEN_Z+31,0.45,0.18,6.5,0xcfd6df);
+    fork.rotation.y = 0.2;
+    const knife = addKitchenBox(-17+i*18,8.0,KITCHEN_Z+31,0.55,0.18,7.5,0xdfe4ea);
+    knife.rotation.y = -0.16;
+  }
+  addKitchenBox(0,1.8,KITCHEN_Z+116,82,3.6,36,0x8a5b3d); // dining table
+  for (const sx of [-1,1]) for (const sz of [-1,1]) addKitchenBox(sx*34,-3,KITCHEN_Z+116+sz*13,4,9,4,0x6c442d);
+  const startKnife = addKitchenBox(18,8.15,KITCHEN_Z-10,2.2,0.32,18,0xd8dde8);
+  startKnife.rotation.y = 0.7;
+  giantHuman = makeHumanWithKnife();
+}
+function enterKitchenWorld(){
+  buildKitchenWorld();
+  playerState.world = 'kitchen';
+  kitchenWin = false;
+  playerState.vel.set(0,0,0);
+  playerState.pitch = 0;
+  camYawOffset = 0;
+  camPitchOffset = 0.22;
+  player.position.set(-52,playerState.kitchenY,KITCHEN_Z+8);
+  for (const part of orcaParts) part.visible = false;
+  if (player.userData.unicorn) player.userData.unicorn.visible = false;
+  if (!player.userData.toast){
+    player.userData.toast = makeToast();
+    player.add(player.userData.toast);
+  }
+  player.userData.toast.visible = true;
+  for (const obj of meadowObjects) obj.visible = false;
+  for (const obj of kitchenObjects) obj.visible = true;
+  if (whitePortal) whitePortal.visible = false;
+  if (giantHuman){
+    giantHuman.visible = true;
+    giantHuman.userData.phase = 'enter';
+    giantHuman.userData.timer = 0;
+    giantHuman.userData.swingTimer = 0;
+    giantHuman.position.set(22,0,KITCHEN_Z-95);
+  }
+  sea.visible = false;
+  underSurface.visible = false;
+  floor.visible = false;
+  showMsg('You are toast. Reach the toaster!',2.4,'#fff174');
+}
+function toastDeath(){
+  if (playerState.dead) return;
+  if (player.userData.toast){
+    player.userData.toast.scale.x = 0.48;
+    const half = player.userData.toast.clone();
+    half.position.x += 0.8;
+    half.rotation.z = -0.45;
+    player.add(half);
+    player.userData.toast.position.x -= 0.45;
+    player.userData.toast.rotation.z = 0.45;
+  }
+  endGame('You Died','The giant knife cut the toast in half.');
+}
+function winKitchen(){
+  if (playerState.dead || kitchenWin) return;
+  kitchenWin = true;
+  endGame('You Escaped!','The toast jumped into the toaster and survived breakfast.', {keepHunger:true});
 }
 function makePortal(){
   const g = new THREE.Group();
@@ -1373,6 +1669,29 @@ function makePortal(){
   scene.add(g);
   return g;
 }
+function makeWhitePortal(){
+  const g = new THREE.Group();
+  const outer = new THREE.Mesh(new THREE.TorusGeometry(3.2,0.26,12,48), new THREE.MeshStandardMaterial({color:0xffffff, emissive:0xdff7ff, emissiveIntensity:0.9, roughness:.18}));
+  const inner = new THREE.Mesh(new THREE.TorusGeometry(2.25,0.09,8,42), new THREE.MeshBasicMaterial({color:0xf8fbff, transparent:true, opacity:.84}));
+  const mist = new THREE.Mesh(new THREE.CircleGeometry(2.7,36), new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:.34, side:THREE.DoubleSide}));
+  g.add(outer, inner, mist);
+  g.userData.rings = [outer, inner, mist];
+  const sparks = [];
+  for (let i=0;i<34;i++){
+    const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.07+Math.random()*0.08,0), new THREE.MeshBasicMaterial({color:Math.random()<.5?0xffffff:0xcfeeff}));
+    s.userData.a = Math.random()*Math.PI*2;
+    s.userData.r = 1.0 + Math.random()*2.0;
+    s.userData.sp = 1.0 + Math.random()*1.6;
+    g.add(s);
+    sparks.push(s);
+  }
+  const light = new THREE.PointLight(0xffffff, 2.8, 26);
+  g.add(light);
+  g.userData.sparks = sparks;
+  g.visible = false;
+  scene.add(g);
+  return g;
+}
 function spawnPortalNearPlayer(){
   if (portal || playerState.world!=='arctic') return;
   portal = makePortal();
@@ -1381,6 +1700,15 @@ function spawnPortalNearPlayer(){
   portal.rotation.y = playerState.yaw;
   portal.visible = true;
   showMsg('A pink portal opened!',2.2,'#ff9dec');
+}
+function spawnWhitePortalNearPlayer(){
+  if (whitePortal || playerState.world!=='meadow') return;
+  whitePortal = makeWhitePortal();
+  const ahead = new THREE.Vector3(-Math.sin(playerState.yaw), 0, -Math.cos(playerState.yaw)).multiplyScalar(28);
+  whitePortal.position.set(player.position.x + ahead.x, 3.1, player.position.z + ahead.z);
+  whitePortal.rotation.y = playerState.yaw;
+  whitePortal.visible = true;
+  showMsg('A white portal opened!',2.2,'#ffffff');
 }
 function makeHayPile(x,z){
   const g = new THREE.Group();
@@ -1460,6 +1788,7 @@ function enterMeadowWorld(){
   for (const s of loosePenguins) s.visible = false;
   for (const w of looseWalruses) w.visible = false;
   for (let i=0;i<3;i++) spawnMeadowMonster();
+  if (playerState.level >= 3) spawnWhitePortalNearPlayer();
   showMsg('You became a unicorn!',2.4,'#ff9dec');
   orcaCall(760,.6,'triangle');
 }
@@ -1602,6 +1931,7 @@ function addXP(amount){
     showMsg('LEVEL '+playerState.level+' - stamina restored',1.5,'#fff174');
     orcaCall(520,.35,'triangle');
     if (playerState.level >= 2) spawnPortalNearPlayer();
+    if (playerState.level >= 3) spawnWhitePortalNearPlayer();
   }
   updateXPBar();
 }
@@ -1609,11 +1939,15 @@ function updateXPBar(){
   xpEl.style.width = (playerState.xp / xpNeeded() * 100)+'%';
   levelTextEl.textContent = 'LVL '+playerState.level;
 }
-function endGame(){
+function endGame(title='You Died', detail='The hunt ended.', options={}){
   if (playerState.dead) return;
   playerState.dead = true;
-  playerState.hunger = 0;
-  hungerEl.style.width = '0%';
+  if (!options.keepHunger){
+    playerState.hunger = 0;
+    hungerEl.style.width = '0%';
+  }
+  gameOverEl.querySelector('h2').textContent = title;
+  gameOverEl.querySelector('p').textContent = detail;
   finalStatsEl.textContent = `Level ${playerState.level} - Seals ${playerState.scoreSeal}, Penguins ${playerState.scorePenguin}, Fish ${playerState.scoreFish}, Walrus ${playerState.scoreWalrus}`;
   gameOverEl.style.display = 'flex';
   lockHint.style.display = 'none';
@@ -1867,6 +2201,7 @@ function update(dt){
   waveT += dt;
   if (playerState.dead) return;
   const inMeadow = playerState.world === 'meadow';
+  const inKitchen = playerState.world === 'kitchen';
   const cycle = (waveT*0.006) % 1;
   const sunAngle = cycle*Math.PI*2 - Math.PI/2;
   const sunHeight = Math.sin(sunAngle);
@@ -1920,23 +2255,17 @@ function update(dt){
   // PLAYER INPUT
   // ============================================================
   const sprinting = (keys['ShiftLeft']||keys['ShiftRight']) && keys['KeyW'] && playerState.stamina>0;
-  const turnSpeed = inMeadow ? (sprinting ? 2.5 : 2.0) : (sprinting ? 2.2 : 1.8);
-  const accel = inMeadow ? (sprinting ? 24 : 17) : (sprinting ? 30 : 22);
-  const maxSpeed = inMeadow ? (sprinting ? 14 : 9) : (sprinting ? 22 : 16);
-  const drag = inMeadow ? 2.4 : 1.5;
+  const turnSpeed = (inMeadow || inKitchen) ? (sprinting ? 2.5 : 2.0) : (sprinting ? 2.2 : 1.8);
+  const accel = inKitchen ? (sprinting ? 18 : 13) : inMeadow ? (sprinting ? 24 : 17) : (sprinting ? 30 : 22);
+  const maxSpeed = inKitchen ? (sprinting ? 12 : 8) : inMeadow ? (sprinting ? 14 : 9) : (sprinting ? 22 : 16);
+  const drag = (inMeadow || inKitchen) ? 2.4 : 1.5;
 
   let turnInput = 0;
   if (keys['KeyA']) turnInput += 1;
   if (keys['KeyD']) turnInput -= 1;
   playerState.yaw += turnInput * turnSpeed * dt;
 
-  // mouse yaw bleeds into heading
-  if (Math.abs(camYawOffset) > 0){
-    const bleed = Math.min(Math.abs(camYawOffset), dt*1.4) * Math.sign(camYawOffset);
-    playerState.yaw += bleed;
-    camYawOffset -= bleed;
-  }
-  playerState.pitch = inMeadow ? 0 : THREE.MathUtils.lerp(playerState.pitch, camPitchOffset*0.7, Math.min(1,dt*3));
+  playerState.pitch = (inMeadow || inKitchen) ? 0 : THREE.MathUtils.lerp(playerState.pitch, camPitchOffset*0.7, Math.min(1,dt*3));
 
   let throttle = 0;
   if (keys['KeyW']) throttle += 1;
@@ -1951,7 +2280,7 @@ function update(dt){
 
   const wish = new THREE.Vector3().copy(forward).multiplyScalar(throttle);
   // Vertical thrust is independent — guarantees you can rise even if pitched down
-  if (inMeadow){
+  if (inMeadow || inKitchen){
     wish.y = 0;
   } else {
     if (keys['Space']){ wish.y = Math.max(wish.y, 0) + 1.6; }
@@ -1959,6 +2288,11 @@ function update(dt){
   }
 
   playerState.vel.addScaledVector(wish, accel*dt);
+  if (inKitchen){
+    const grounded = player.position.y <= playerState.kitchenY + 0.03;
+    if (keys['Space'] && grounded) playerState.vel.y = 10;
+    playerState.vel.y -= 22*dt;
+  }
   playerState.vel.multiplyScalar(Math.max(0, 1 - drag*dt));
   if (playerState.vel.length()>maxSpeed) playerState.vel.setLength(maxSpeed);
   player.position.addScaledVector(playerState.vel, dt);
@@ -1969,6 +2303,14 @@ function update(dt){
     playerState.vel.y = 0;
     player.position.x = THREE.MathUtils.clamp(player.position.x, -320, 320);
     player.position.z = THREE.MathUtils.clamp(player.position.z, MEADOW_Z-320, MEADOW_Z+320);
+  } else if (inKitchen){
+    player.position.x = THREE.MathUtils.clamp(player.position.x, -78, 75);
+    player.position.z = THREE.MathUtils.clamp(player.position.z, KITCHEN_Z-38, KITCHEN_Z+40);
+    if (player.position.y < playerState.kitchenY){
+      player.position.y = playerState.kitchenY;
+      if (playerState.vel.y < 0) playerState.vel.y = 0;
+    }
+    if (toaster && player.position.distanceTo(toaster.userData.entry) < 5.2 && keys['Space']) winKitchen();
   } else {
     const surfaceY = -0.7;
     if (player.position.y > surfaceY){
@@ -1991,12 +2333,12 @@ function update(dt){
 
   // BODY ROTATION
   // Reverse-facing when going backward: rotate model 180° around Y so we see its face
-  const targetYawOffset = (throttle < -0.05) ? Math.PI : 0;
+  const targetYawOffset = (throttle < -0.05 && !inKitchen) ? Math.PI : 0;
   playerState.bodyYawOffset = THREE.MathUtils.lerp(playerState.bodyYawOffset, targetYawOffset, Math.min(1, dt*4));
   // Body pitches with dive/rise — based on actual vertical velocity AND input pitch
   const horizSp = Math.hypot(playerState.vel.x, playerState.vel.z);
   const movePitch = Math.atan2(playerState.vel.y, Math.max(2, horizSp));
-  const targetBodyPitch = playerState.pitch*0.3 + movePitch*0.9;
+  const targetBodyPitch = inKitchen ? 0 : playerState.pitch*0.3 + movePitch*0.9;
   playerState.bodyPitch = THREE.MathUtils.lerp(playerState.bodyPitch, targetBodyPitch, Math.min(1, dt*4));
   // bank visual
   const targetRoll = -turnInput*0.5;
@@ -2010,14 +2352,16 @@ function update(dt){
   // Tail flapping animation
   const speedMag = playerState.vel.length();
   if (inMeadow) animateUnicorn(player.userData.unicorn, speedMag, waveT);
-  else animateOrca(player, speedMag, waveT, 0);
+  else if (inKitchen && player.userData.toast){
+    player.userData.toast.rotation.z = Math.sin(waveT*8)*0.08*Math.min(1,speedMag/5);
+  } else animateOrca(player, speedMag, waveT, 0);
 
   playerState.speed = speedMag;
   spdEl.textContent = speedMag.toFixed(1);
-  depthEl.textContent = inMeadow ? '0.0' : Math.max(0, -player.position.y).toFixed(1);
+  depthEl.textContent = (inMeadow || inKitchen) ? '0.0' : Math.max(0, -player.position.y).toFixed(1);
 
   // hunger drain
-  playerState.hunger -= dt * (0.22 + speedMag*0.012 + (sprinting ? 0.06 : 0));
+  if (!inKitchen) playerState.hunger -= dt * (0.22 + speedMag*0.012 + (sprinting ? 0.06 : 0));
   if (playerState.hunger<=0){ endGame(); return; }
   const hungerLow = playerState.hunger < 30;
   hungerEl.classList.toggle('warn', hungerLow);
@@ -2039,6 +2383,18 @@ function update(dt){
       s.position.set(Math.cos(s.userData.a)*s.userData.r, Math.sin(s.userData.a*1.7)*1.8, Math.sin(s.userData.a)*s.userData.r);
     }
     if (!inMeadow && player.position.distanceTo(portal.position) < 5.2) enterMeadowWorld();
+  }
+  if (whitePortal && whitePortal.visible){
+    whitePortal.rotation.y += dt*0.95;
+    const rings = whitePortal.userData.rings || [];
+    if (rings[0]) rings[0].rotation.z -= dt*1.7;
+    if (rings[1]) rings[1].rotation.z += dt*3.4;
+    if (rings[2]) rings[2].rotation.z -= dt*2.1;
+    for (const s of whitePortal.userData.sparks || []){
+      s.userData.a += dt*s.userData.sp;
+      s.position.set(Math.cos(s.userData.a)*s.userData.r, Math.sin(s.userData.a*1.6)*1.9, Math.sin(s.userData.a)*s.userData.r);
+    }
+    if (inMeadow && player.position.distanceTo(whitePortal.position) < 5.4) enterKitchenWorld();
   }
   if (inMeadow){
     if (reloadTimer > 0){
@@ -2099,9 +2455,14 @@ function update(dt){
       const toPlayer = new THREE.Vector3().subVectors(player.position, m.position);
       const dist = toPlayer.length();
       const dir = dist>0.1 ? toPlayer.divideScalar(dist) : new THREE.Vector3();
-      m.userData.vel.lerp(dir.multiplyScalar(4.2), Math.min(1,dt*2.4));
+      if (m.userData.kind === 'mushroom'){
+        m.userData.jumpPhase += dt*5.5;
+        m.position.y = Math.abs(Math.sin(m.userData.jumpPhase))*1.15;
+      }
+      const speed = m.userData.speed || 4.2;
+      m.userData.vel.lerp(dir.clone().multiplyScalar(speed), Math.min(1,dt*2.4));
       m.position.addScaledVector(m.userData.vel, dt);
-      m.position.y = 0;
+      if (m.userData.kind !== 'mushroom') m.position.y = 0;
       m.lookAt(player.position.x, 0.8, player.position.z);
       for (let k=0;k<(m.userData.legs||[]).length;k++){
         m.userData.legs[k].rotation.x = Math.sin(waveT*7 + k*Math.PI)*0.32;
@@ -2114,28 +2475,87 @@ function update(dt){
       }
     }
   }
-  updateAmmoHud();
-
+  if (inKitchen){
+    if (toasterArrow){
+      toasterArrow.position.y = 20 + Math.sin(waveT*3)*1.2;
+      toasterArrow.rotation.y += dt*1.6;
+      if (toaster && player.position.distanceTo(toaster.userData.entry) < 9 && msgTimer<=0) showMsg('Press Space to jump into the toaster',.45,'#fff174');
+    }
+    if (giantHuman){
+      const h = giantHuman.userData;
+      h.timer += dt;
+      if (h.phase === 'enter'){
+        giantHuman.position.z = THREE.MathUtils.lerp(giantHuman.position.z, KITCHEN_Z-48, Math.min(1,dt*0.55));
+        if (h.timer > 2.5){
+          h.phase = 'pickup';
+          h.timer = 0;
+          showMsg('The giant grabbed a knife!',1.4,'#ffd2d2');
+        }
+      } else if (h.phase === 'pickup'){
+        h.arm.rotation.z = THREE.MathUtils.lerp(h.arm.rotation.z, -1.15, Math.min(1,dt*1.2));
+        if (h.timer > 1.6){
+          h.phase = 'ready';
+          h.timer = 0;
+        }
+      } else if (h.phase === 'ready'){
+        h.arm.rotation.z = THREE.MathUtils.lerp(h.arm.rotation.z, -0.55, Math.min(1,dt*1.3));
+        if (h.timer > 2.2){
+          h.phase = 'swing';
+          h.swingTimer = 0;
+          h.timer = 0;
+          showMsg('Knife swing!',.8,'#ff7777');
+        }
+      } else if (h.phase === 'swing'){
+        h.swingTimer += dt;
+        const t = THREE.MathUtils.clamp(h.swingTimer/1.85,0,1);
+        h.arm.rotation.z = THREE.MathUtils.lerp(-0.55, -2.45, Math.sin(t*Math.PI*0.5));
+        h.arm.rotation.x = THREE.MathUtils.lerp(0, -0.55, Math.sin(t*Math.PI));
+        const knifePos = new THREE.Vector3();
+        h.knife.getWorldPosition(knifePos);
+        const flatDist = Math.hypot(knifePos.x-player.position.x, knifePos.z-player.position.z);
+        if (t > 0.28 && t < 0.82 && flatDist < 13.5 && Math.abs(knifePos.y-player.position.y) < 11){
+          toastDeath();
+          return;
+        }
+        if (t >= 1){
+          h.phase = 'recover';
+          h.timer = 0;
+        }
+      } else if (h.phase === 'recover'){
+        h.arm.rotation.z = THREE.MathUtils.lerp(h.arm.rotation.z, -0.55, Math.min(1,dt*1.8));
+        h.arm.rotation.x = THREE.MathUtils.lerp(h.arm.rotation.x, 0, Math.min(1,dt*1.8));
+        if (h.timer > 2.4){
+          h.phase = 'ready';
+          h.timer = 0;
+        }
+      }
+    }
+  }
   // ============================================================
   // CAMERA — orbit third-person, always shows player
   // ============================================================
-  const camYaw = playerState.yaw;
-  const camPitch = camPitchOffset * 0.7;
-  const camDist = 13 + Math.min(4, speedMag*0.15);
-  const camHeight = 4.5 + camPitch*-3;
+  const camYaw = playerState.yaw + camYawOffset;
+  const camPitch = camPitchOffset * 0.85;
+  const camDist = inKitchen ? 24 : 13 + Math.min(4, speedMag*0.15);
+  const camHeight = inKitchen ? 14 + camPitch*-6 : 4.5 + camPitch*-3;
   const cx = player.position.x + Math.sin(camYaw)*camDist;
   const cy = player.position.y + camHeight;
   const cz = player.position.z + Math.cos(camYaw)*camDist;
-  camera.position.lerp(new THREE.Vector3(cx,cy,cz), Math.min(1, dt*4.5));
-  if (camera.position.y > 8) camera.position.y = 8;
-  if (camera.position.y < -28) camera.position.y = -28;
-  camera.lookAt(player.position.x, player.position.y + (inMeadow ? 1.3 : 0.5), player.position.z);
+  camera.position.set(cx,cy,cz);
+  if (!inKitchen && camera.position.y > 8) camera.position.y = 8;
+  if (!inKitchen && camera.position.y < -28) camera.position.y = -28;
+  camera.lookAt(player.position.x, player.position.y + (inKitchen ? 1.1 : inMeadow ? 1.3 : 0.5), player.position.z);
+  updateAmmoHud();
 
   // sky/fog mode
-  const underwater = !inMeadow && camera.position.y < -0.3;
+  const underwater = !inMeadow && !inKitchen && camera.position.y < -0.3;
   sky.visible = !underwater;
   if (underwater) sunDisc.visible = false;
-  if (inMeadow){
+  if (inKitchen){
+    scene.background = new THREE.Color(0xf6ead8);
+    scene.fog.color.setHex(0xf6ead8);
+    scene.fog.near = 120; scene.fog.far = 520;
+  } else if (inMeadow){
     scene.background = new THREE.Color(0xb8f0ff);
     scene.fog.color.setHex(0xb8f0ff);
     scene.fog.near = 90; scene.fog.far = 430;
@@ -2602,6 +3022,12 @@ function update(dt){
       }
       compassLabelEl.textContent = 'Nearest hay';
     }
+  } else if (inKitchen){
+    if (toaster){
+      bd = toaster.userData.entry.distanceTo(player.position);
+      bestTarget = toaster.userData.entry;
+    }
+    compassLabelEl.textContent = 'Toaster exit';
   } else {
     for (const f of iceFloes){
       if (f.broken || f.prey.length===0) continue;

@@ -22,6 +22,12 @@
   #warning{position:absolute;top:118px;left:14px;background:rgba(190,18,40,.88);border:1px solid rgba(255,255,255,.75);padding:7px 10px;border-radius:8px;font-size:12px;font-weight:800;letter-spacing:.8px;text-shadow:1px 1px 2px #000;z-index:11;opacity:0;transition:opacity .2s;pointer-events:none}
   #score{position:absolute;top:14px;right:18px;font-size:20px;font-weight:bold;text-shadow:1px 1px 3px #000;z-index:10;text-align:right}
   #score small{display:block;font-size:12px;opacity:.85;font-weight:normal}
+  #ammo{position:absolute;top:210px;right:18px;font-size:14px;font-weight:800;text-shadow:1px 1px 3px #000;z-index:10;text-align:right;display:none}
+  #crosshair{position:absolute;left:50%;top:50%;width:26px;height:26px;transform:translate(-50%,-50%);z-index:12;pointer-events:none;display:none}
+  #crosshair:before,#crosshair:after{content:"";position:absolute;background:rgba(255,255,255,.92);box-shadow:0 0 5px rgba(255,80,220,.9)}
+  #crosshair:before{left:12px;top:0;width:2px;height:26px}
+  #crosshair:after{left:0;top:12px;width:26px;height:2px}
+  #crosshair .dot{position:absolute;left:10px;top:10px;width:6px;height:6px;border:2px solid #ff75dd;border-radius:50%;box-shadow:0 0 8px #ff75dd}
   #compass{position:absolute;top:90px;right:18px;width:100px;height:100px;border:2px solid rgba(255,255,255,.5);border-radius:50%;background:rgba(0,0,0,.3);z-index:10}
   #compass .arrow{position:absolute;top:50%;left:50%;width:4px;height:42px;background:linear-gradient(#ff5252,#ffd2d2);border-radius:2px;transform-origin:50% 100%;transform:translate(-50%,-100%) rotate(0deg);box-shadow:0 0 6px rgba(255,82,82,.7)}
   #compass .blip{position:absolute;left:50%;top:50%;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;background:#fff174;box-shadow:0 0 9px #fff174;transform:translate(0,0)}
@@ -63,6 +69,8 @@
   <div id="stats">Pod: <span id="podCount">3</span> · Speed: <span id="spd">0</span> · Depth: <span id="depth">0</span>m · <span id="time">Day</span></div>
 </div>
 <div id="score">Seals: <span id="sScore">0</span><small>Penguins: <span id="pScore">0</span> · Fish: <span id="fScore">0</span> · Walrus: <span id="wScore">0</span></small></div>
+<div id="ammo">Blaster: <span id="ammoCount">30</span>/30</div>
+<div id="crosshair"><div class="dot"></div></div>
 <div id="warning">HUNGER LOW - HUNT NOW</div>
 <div id="compass"><div class="arrow" id="arrow"></div><div class="blip" id="preyBlip"></div><div class="range" id="preyRange">--m</div><div class="label" id="compassLabel">Nearest prey</div></div>
 <div id="msg"></div>
@@ -72,6 +80,7 @@
   <b>Shift+W</b> sprint &nbsp; <b>Mouse</b> look<br>
   <b>E</b> bite (water) / breach (ice) &nbsp; <b>F</b> echolocation pulse<br>
   <b>C</b> call pod &nbsp; <b>Q</b> joint attack<br>
+  In the unicorn world: <b>E</b> collect/eat &nbsp; <b>Click</b> shoot after finding the ground blaster.<br>
   Hunt seals on ice, chase penguins/fish in water, ambush walruses. At level 2, find the pink portal.
 </div>
 
@@ -1126,6 +1135,8 @@ const playerState = {
   attackCooldown: 0,
   echoActive: 0,
   world: 'arctic',
+  hasGun: false,
+  ammo: 30,
   dead: false,
 };
 
@@ -1137,12 +1148,207 @@ let portal = null;
 let meadowBuilt = false;
 const meadowObjects = [];
 const hayPiles = [];
+const unicornShots = [];
+let groundGun = null;
+let river = null;
+const meadowMonsters = [];
+let monsterSpawnTimer = 0;
+let reloadTimer = 0;
+const GUN_MAG_SIZE = 30;
+const GUN_RELOAD_TIME = 2.2;
 
 function addMeadowObject(obj){
   obj.visible = false;
   scene.add(obj);
   meadowObjects.push(obj);
   return obj;
+}
+function makeUnicornGun(){
+  const g = new THREE.Group();
+  const steel = new THREE.MeshStandardMaterial({color:0x4d5362, flatShading:true, roughness:.45, metalness:.18});
+  const dark = new THREE.MeshStandardMaterial({color:0x191b24, flatShading:true, roughness:.55});
+  const pinkGlow = new THREE.MeshStandardMaterial({color:0xff62dc, emissive:0xff2fd3, emissiveIntensity:.65, flatShading:true, roughness:.28});
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.42,0.28,1.3), steel);
+  body.position.z = -0.2;
+  g.add(body);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.11,0.14,1.1,8), dark);
+  barrel.rotation.x = Math.PI/2;
+  barrel.position.z = -1.08;
+  g.add(barrel);
+  const crystal = new THREE.Mesh(new THREE.IcosahedronGeometry(0.18,0), pinkGlow);
+  crystal.position.set(0,0.22,-0.18);
+  g.add(crystal);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.18,0.58,0.28), dark);
+  grip.position.set(0,-0.34,0.22);
+  grip.rotation.x = -0.28;
+  g.add(grip);
+  g.userData.crystal = crystal;
+  g.traverse(o=>{ if(o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return g;
+}
+function makeBigTree(x,z,scale=1){
+  const g = new THREE.Group();
+  const trunkMat = new THREE.MeshStandardMaterial({color:0x7b5135, flatShading:true, roughness:.9});
+  const leafMats = [
+    new THREE.MeshStandardMaterial({color:0x1f6f45, flatShading:true, roughness:.85}),
+    new THREE.MeshStandardMaterial({color:0x2f8f4b, flatShading:true, roughness:.85}),
+    new THREE.MeshStandardMaterial({color:0x5ca85b, flatShading:true, roughness:.85})
+  ];
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.7*scale,1.05*scale,8.5*scale,7), trunkMat);
+  trunk.position.y = 4.2*scale;
+  g.add(trunk);
+  for (let i=0;i<5;i++){
+    const crown = new THREE.Mesh(new THREE.IcosahedronGeometry((2.3+Math.random()*0.8)*scale,1), leafMats[i%leafMats.length]);
+    crown.position.set((Math.random()-.5)*2.2*scale, (8.2+Math.random()*3.2)*scale, (Math.random()-.5)*2.2*scale);
+    crown.scale.y = 0.82 + Math.random()*0.35;
+    g.add(crown);
+  }
+  g.position.set(x,0,z);
+  g.traverse(o=>{ if(o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return addMeadowObject(g);
+}
+function makeMountain(x,z,scale=1){
+  const g = new THREE.Group();
+  const rock = new THREE.MeshStandardMaterial({color:0x7b8491, flatShading:true, roughness:.96});
+  const snow = new THREE.MeshStandardMaterial({color:0xf8fbff, flatShading:true, roughness:.9});
+  const peak = new THREE.Mesh(new THREE.ConeGeometry(18*scale,36*scale,6), rock);
+  peak.position.y = 18*scale;
+  peak.rotation.y = Math.random()*Math.PI;
+  g.add(peak);
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(8*scale,9*scale,6), snow);
+  cap.position.y = 32*scale;
+  cap.rotation.y = peak.rotation.y;
+  g.add(cap);
+  g.position.set(x,0,z);
+  g.traverse(o=>{ if(o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return addMeadowObject(g);
+}
+function makeRiver(){
+  const shape = new THREE.Shape();
+  const left = [], right = [];
+  for (let i=0;i<18;i++){
+    const t = i/17;
+    const x = -245 + t*490;
+    const z = Math.sin(t*Math.PI*3.2)*28 + MEADOW_Z + 92 - t*190;
+    const width = 8 + Math.sin(t*Math.PI*2)*2.5;
+    left.push(new THREE.Vector2(x, z-width));
+    right.unshift(new THREE.Vector2(x, z+width));
+  }
+  shape.moveTo(left[0].x, left[0].y);
+  for (const p of left.slice(1)) shape.lineTo(p.x,p.y);
+  for (const p of right) shape.lineTo(p.x,p.y);
+  shape.lineTo(left[0].x,left[0].y);
+  const water = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshStandardMaterial({color:0x48b9df, emissive:0x0f6085, emissiveIntensity:.18, roughness:.28, metalness:.08, transparent:true, opacity:.86}));
+  water.rotation.x = -Math.PI/2;
+  water.position.y = 0.08;
+  water.receiveShadow = true;
+  water.userData.baseOpacity = 0.86;
+  return addMeadowObject(water);
+}
+function makeMeadowMonster(){
+  const g = new THREE.Group();
+  const hide = new THREE.MeshStandardMaterial({color:0x5d2e82, flatShading:true, roughness:.75, emissive:0x180022, emissiveIntensity:.18});
+  const horn = new THREE.MeshStandardMaterial({color:0xd6e1ff, flatShading:true, roughness:.55});
+  const eye = new THREE.MeshBasicMaterial({color:0xff3a8c});
+  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.9,1), hide);
+  body.scale.set(1.1,0.95,1.25);
+  body.position.y = 1.05;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.48,1), hide);
+  head.position.set(0,1.55,-0.86);
+  g.add(head);
+  for (const sx of [-1,1]){
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.25,0.85,0.28), hide);
+    leg.position.set(sx*0.42,0.42,0.38);
+    g.add(leg);
+    const claw = new THREE.Mesh(new THREE.ConeGeometry(0.11,0.35,4), horn);
+    claw.position.set(sx*0.42,0.08,-0.12);
+    claw.rotation.x = -Math.PI/2;
+    g.add(claw);
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.065,6,5), eye);
+    e.position.set(sx*0.16,1.62,-1.25);
+    g.add(e);
+  }
+  for (const sx of [-1,1]){
+    const h = new THREE.Mesh(new THREE.ConeGeometry(0.12,0.55,5), horn);
+    h.position.set(sx*0.22,1.98,-0.9);
+    h.rotation.z = sx*0.35;
+    g.add(h);
+  }
+  g.userData.hp = 3;
+  g.userData.vel = new THREE.Vector3();
+  g.userData.attackCooldown = 0;
+  g.userData.legs = g.children.filter(o=>o.geometry && o.geometry.type==='BoxGeometry');
+  g.traverse(o=>{ if(o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return g;
+}
+function spawnMeadowMonster(){
+  if (playerState.world !== 'meadow') return;
+  const monster = makeMeadowMonster();
+  const a = Math.random()*Math.PI*2;
+  const r = 85 + Math.random()*70;
+  monster.position.set(player.position.x + Math.cos(a)*r, 0, player.position.z + Math.sin(a)*r);
+  monster.position.x = THREE.MathUtils.clamp(monster.position.x, -300, 300);
+  monster.position.z = THREE.MathUtils.clamp(monster.position.z, MEADOW_Z-300, MEADOW_Z+300);
+  addMeadowObject(monster);
+  monster.visible = true;
+  meadowMonsters.push(monster);
+}
+function createGroundGun(){
+  groundGun = makeUnicornGun();
+  groundGun.scale.setScalar(1.1);
+  groundGun.position.set(8,0.45,MEADOW_Z-9);
+  groundGun.rotation.set(0.12,0.9,0.1);
+  addMeadowObject(groundGun);
+}
+function attachGunToUnicorn(){
+  if (playerState.hasGun || !groundGun || !player.userData.unicorn) return;
+  playerState.hasGun = true;
+  groundGun.visible = false;
+  playerState.ammo = GUN_MAG_SIZE;
+  reloadTimer = 0;
+  const carried = makeUnicornGun();
+  carried.name = 'carriedBlaster';
+  carried.scale.setScalar(0.7);
+  carried.position.set(0.58,1.86,-1.85);
+  carried.rotation.set(-0.08,-0.18,-0.18);
+  player.userData.unicorn.add(carried);
+  player.userData.carriedGun = carried;
+  showMsg('Blaster collected - click to shoot',1.5,'#ff9dec');
+  orcaCall(980,.22,'triangle');
+}
+function shootUnicornGun(){
+  if (playerState.dead || playerState.world !== 'meadow' || !playerState.hasGun) return;
+  if (reloadTimer > 0){ showMsg('Reloading...',.45,'#ffd2d2'); return; }
+  if (playerState.ammo <= 0){
+    reloadTimer = GUN_RELOAD_TIME;
+    showMsg('Reloading...',.8,'#ffd2d2');
+    return;
+  }
+  playerState.ammo -= 1;
+  if (playerState.ammo <= 0) reloadTimer = GUN_RELOAD_TIME;
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir).normalize();
+  const shot = new THREE.Mesh(new THREE.SphereGeometry(0.16,8,6), new THREE.MeshBasicMaterial({color:0xff65dd}));
+  shot.position.copy(player.position).add(new THREE.Vector3(0,1.65,0)).addScaledVector(dir,2.4);
+  shot.userData.v = dir.multiplyScalar(78);
+  shot.userData.life = 1.6;
+  shot.userData.damage = 1;
+  scene.add(shot);
+  unicornShots.push(shot);
+  emitBubbles(shot.position,3,0xff75dd);
+  clickSound();
+}
+function updateAmmoHud(){
+  const ammoEl = document.getElementById('ammo');
+  const ammoCountEl = document.getElementById('ammoCount');
+  const crosshairEl = document.getElementById('crosshair');
+  const show = playerState.world === 'meadow' && playerState.hasGun;
+  ammoEl.style.display = show ? 'block' : 'none';
+  crosshairEl.style.display = show ? 'block' : 'none';
+  if (show){
+    ammoEl.textContent = reloadTimer > 0 ? `Reloading ${(reloadTimer).toFixed(1)}s` : `Blaster: ${playerState.ammo}/${GUN_MAG_SIZE}`;
+  }
 }
 function makePortal(){
   const g = new THREE.Group();
@@ -1206,6 +1412,15 @@ function buildMeadowWorld(){
   grass.position.z = MEADOW_Z;
   grass.receiveShadow = true;
   addMeadowObject(grass);
+  river = makeRiver();
+  for (let i=0;i<9;i++){
+    const side = i%2 ? -1 : 1;
+    makeMountain(-260 + i*65, MEADOW_Z + side*(235+Math.random()*32), 0.75+Math.random()*0.65);
+  }
+  for (let i=0;i<22;i++){
+    const a = Math.random()*Math.PI*2, r = 55+Math.random()*230;
+    makeBigTree(Math.cos(a)*r, MEADOW_Z+Math.sin(a)*r, 0.75+Math.random()*0.75);
+  }
   for (let i=0;i<90;i++){
     const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.18+Math.random()*0.16,0.7+Math.random()*0.8,4), new THREE.MeshStandardMaterial({color:Math.random()<.5?0x2f8f4b:0x7fcf5b, flatShading:true, roughness:.9}));
     const a = Math.random()*Math.PI*2, r = Math.random()*250;
@@ -1217,6 +1432,7 @@ function buildMeadowWorld(){
     const a = Math.random()*Math.PI*2, r = 20+Math.random()*170;
     makeHayPile(Math.cos(a)*r, MEADOW_Z+Math.sin(a)*r);
   }
+  createGroundGun();
 }
 function enterMeadowWorld(){
   buildMeadowWorld();
@@ -1243,6 +1459,7 @@ function enterMeadowWorld(){
   for (const s of looseSeals) s.visible = false;
   for (const s of loosePenguins) s.visible = false;
   for (const w of looseWalruses) w.visible = false;
+  for (let i=0;i<3;i++) spawnMeadowMonster();
   showMsg('You became a unicorn!',2.4,'#ff9dec');
   orcaCall(760,.6,'triangle');
 }
@@ -1319,6 +1536,9 @@ function tryLock(){
 }
 titleEl.addEventListener('click',()=>{ titleEl.style.display='none'; tryLock(); });
 renderer.domElement.addEventListener('click',()=>{ if (!pointerLocked) tryLock(); });
+renderer.domElement.addEventListener('mousedown',e=>{
+  if (e.button===0 && pointerLocked) shootUnicornGun();
+});
 lockHint.addEventListener('click',()=>tryLock());
 document.addEventListener('pointerlockchange',()=>{
   pointerLocked = document.pointerLockElement===renderer.domElement;
@@ -1397,6 +1617,8 @@ function endGame(){
   finalStatsEl.textContent = `Level ${playerState.level} - Seals ${playerState.scoreSeal}, Penguins ${playerState.scorePenguin}, Fish ${playerState.scoreFish}, Walrus ${playerState.scoreWalrus}`;
   gameOverEl.style.display = 'flex';
   lockHint.style.display = 'none';
+  document.getElementById('ammo').style.display = 'none';
+  document.getElementById('crosshair').style.display = 'none';
   if (document.pointerLockElement) document.exitPointerLock();
   orcaCall(180,1.0,'sine');
 }
@@ -1469,6 +1691,10 @@ function biteOrBreach(){
   if (playerState.attackCooldown>0) return;
   playerState.attackCooldown = 0.5;
   if (playerState.world==='meadow'){
+    if (!playerState.hasGun && groundGun && groundGun.visible && groundGun.position.distanceTo(player.position) < 4.8){
+      attachGunToUnicorn();
+      return;
+    }
     eatNearestHay();
     return;
   }
@@ -1814,6 +2040,81 @@ function update(dt){
     }
     if (!inMeadow && player.position.distanceTo(portal.position) < 5.2) enterMeadowWorld();
   }
+  if (inMeadow){
+    if (reloadTimer > 0){
+      reloadTimer -= dt;
+      if (reloadTimer <= 0){
+        reloadTimer = 0;
+        playerState.ammo = GUN_MAG_SIZE;
+        showMsg('Reloaded',.65,'#ff9dec');
+      }
+    }
+    if (groundGun && groundGun.visible){
+      groundGun.rotation.y += dt*1.2;
+      groundGun.position.y = 0.45 + Math.sin(waveT*3.2)*0.12;
+      if (!playerState.hasGun && groundGun.position.distanceTo(player.position) < 5.5 && msgTimer<=0){
+        showMsg('Press E to collect blaster',.35,'#ff9dec');
+      }
+    }
+    monsterSpawnTimer -= dt;
+    if (monsterSpawnTimer <= 0 && meadowMonsters.length < 7){
+      spawnMeadowMonster();
+      monsterSpawnTimer = 7 + Math.random()*4;
+    }
+    if (river){
+      river.material.opacity = river.userData.baseOpacity + Math.sin(waveT*2.2)*0.06;
+    }
+    for (let i=unicornShots.length-1;i>=0;i--){
+      const shot = unicornShots[i];
+      shot.userData.life -= dt;
+      shot.position.addScaledVector(shot.userData.v, dt);
+      let hit = false;
+      for (let j=meadowMonsters.length-1;j>=0;j--){
+        const m = meadowMonsters[j];
+        if (m.visible && shot.position.distanceTo(m.position.clone().add(new THREE.Vector3(0,1,0))) < 1.35){
+          m.userData.hp -= shot.userData.damage;
+          emitBubbles(shot.position,8,0xff75dd);
+          hit = true;
+          if (m.userData.hp <= 0){
+            scene.remove(m);
+            meadowMonsters.splice(j,1);
+            addXP(10);
+            showMsg('Monster zapped! +10 XP',.8,'#ff9dec');
+          } else {
+            m.scale.setScalar(1.15);
+            setTimeout(()=>{ if(m.parent) m.scale.setScalar(1); },120);
+          }
+          break;
+        }
+      }
+      if (hit || shot.userData.life <= 0){
+        scene.remove(shot);
+        unicornShots.splice(i,1);
+      }
+    }
+    for (let i=meadowMonsters.length-1;i>=0;i--){
+      const m = meadowMonsters[i];
+      if (!m.visible) continue;
+      m.userData.attackCooldown = Math.max(0, m.userData.attackCooldown - dt);
+      const toPlayer = new THREE.Vector3().subVectors(player.position, m.position);
+      const dist = toPlayer.length();
+      const dir = dist>0.1 ? toPlayer.divideScalar(dist) : new THREE.Vector3();
+      m.userData.vel.lerp(dir.multiplyScalar(4.2), Math.min(1,dt*2.4));
+      m.position.addScaledVector(m.userData.vel, dt);
+      m.position.y = 0;
+      m.lookAt(player.position.x, 0.8, player.position.z);
+      for (let k=0;k<(m.userData.legs||[]).length;k++){
+        m.userData.legs[k].rotation.x = Math.sin(waveT*7 + k*Math.PI)*0.32;
+      }
+      if (dist < 2.6 && m.userData.attackCooldown<=0){
+        playerState.hunger -= 9;
+        m.userData.attackCooldown = 1.3;
+        showMsg('Monster hit you!',.8,'#ff7777');
+        if (playerState.hunger<=0){ endGame(); return; }
+      }
+    }
+  }
+  updateAmmoHud();
 
   // ============================================================
   // CAMERA — orbit third-person, always shows player
@@ -2289,12 +2590,18 @@ function update(dt){
   // ============================================================
   let bestTarget=null, bd=Infinity;
   if (inMeadow){
-    for (const h of hayPiles){
-      if (h.eaten) continue;
-      const d = h.mesh.position.distanceTo(player.position);
-      if (d<bd){ bd=d; bestTarget=h.mesh.position; }
+    if (!playerState.hasGun && groundGun && groundGun.visible){
+      bd = groundGun.position.distanceTo(player.position);
+      bestTarget = groundGun.position;
+      compassLabelEl.textContent = 'Ground blaster';
+    } else {
+      for (const h of hayPiles){
+        if (h.eaten) continue;
+        const d = h.mesh.position.distanceTo(player.position);
+        if (d<bd){ bd=d; bestTarget=h.mesh.position; }
+      }
+      compassLabelEl.textContent = 'Nearest hay';
     }
-    compassLabelEl.textContent = 'Nearest hay';
   } else {
     for (const f of iceFloes){
       if (f.broken || f.prey.length===0) continue;

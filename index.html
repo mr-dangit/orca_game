@@ -2534,7 +2534,7 @@ function update(dt){
   // ============================================================
   // CAMERA — orbit third-person, always shows player
   // ============================================================
-  const camYaw = playerState.yaw + camYawOffset;
+  const camYaw = camYawOffset;
   const camPitch = camPitchOffset * 0.85;
   const camDist = inKitchen ? 24 : 13 + Math.min(4, speedMag*0.15);
   const camHeight = inKitchen ? 14 + camPitch*-6 : 4.5 + camPitch*-3;
